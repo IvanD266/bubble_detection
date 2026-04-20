@@ -12,10 +12,11 @@
 #include <csignal>
 #include <sys/stat.h>    // For mkdir
 #include <string.h>
+#include <cmath>
 
 // ============ CONFIGURATION ============
 const int BUBBLE_CLASS_ID = 0;          // Class index for "bubble"
-const float BUBBLE_THRESHOLD = 0.2f;    // Confidence threshold (0.0-1.0)
+const float BUBBLE_THRESHOLD = 0.01f;    // Confidence threshold (0.0-1.0)
 const int FPS_WINDOW = 10;              // Frames for smoothed FPS average
 const int PRINT_INTERVAL = 1;           // Output every N frames
 const char* OUTPUT_DIR = "detected_bubbles";
@@ -35,16 +36,49 @@ static void softmax(const float* src, float* dst, int n)
     for (int i = 0; i < n; i++) dst[i] /= sum;
 }
 
+#include <cmath> // Add this if missing
+
 static float get_class_prob(const ncnn::Mat& cls_scores, int target_class)
 {
-    int size = cls_scores.total();
-    if (target_class < 0 || target_class >= size) return 0.f;
-    std::vector<float> probs(size), soft(size);
-    for (int i = 0; i < size; i++) probs[i] = cls_scores[i];
-    softmax(probs.data(), soft.data(), size);
-    return soft[target_class];
-}
+    int num_classes = cls_scores.total();
+    if (num_classes == 0) return 0.0f;
 
+    // 1. Flatten tensor to 1D to safely handle any output shape (1xC, Cx1, 1x1xC, etc.)
+    ncnn::Mat flat = cls_scores.reshape(num_classes);
+
+    // 2. Copy logits & sanitize extreme/invalid values
+    std::vector<float> logits(num_classes);
+    for (int i = 0; i < num_classes; i++) {
+        float val = flat[i];
+        // Clamp to prevent expf() overflow -> inf -> NaN
+        if (std::isinf(val) || std::isnan(val) || val > 50.f) val = 50.f;
+        if (val < -50.f) val = -50.f;
+        logits[i] = val;
+    }
+
+    // 3. Numerically stable softmax
+    float max_val = logits[0];
+    for (int i = 1; i < num_classes; i++)
+        max_val = std::max(max_val, logits[i]);
+
+    float sum_exp = 0.0f;
+    std::vector<float> probs(num_classes);
+    for (int i = 0; i < num_classes; i++) {
+        probs[i] = expf(logits[i] - max_val);
+        sum_exp += probs[i];
+    }
+
+    if (sum_exp <= 1e-6f) return 0.0f; // Prevent 0/0 division
+
+    for (int i = 0; i < num_classes; i++)
+        probs[i] /= sum_exp;
+
+    // 4. Return target class probability
+    if (target_class >= 0 && target_class < num_classes)
+        return probs[target_class];
+
+    return 0.0f;
+}
 static int detect_bubble(const cv::Mat& bgr, float& bubble_prob)
 {
     yolov8.opt.use_vulkan_compute = false;
