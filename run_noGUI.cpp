@@ -106,11 +106,25 @@ static int detect_bubble(const cv::Mat& bgr, float& bubble_prob)
     const float norm_vals[3] = {1/255.f, 1/255.f, 1/255.f};
     in_pad.substract_mean_normalize(0, norm_vals);
 
-    ncnn::Extractor ex = yolov8.create_extractor();
-    ex.input("in0", in_pad);
-    ncnn::Mat out;
+ncnn::Extractor ex = yolov8.create_extractor();
+ex.input("in0", in_pad);
+ncnn::Mat out;
     ex.extract("out0", out);
-    bubble_prob = get_class_prob(out, BUBBLE_CLASS_ID);
+
+    // out shape: w=8400, h=5, c=1 → 8400 proposals × 5 values each
+    // Column index 4 = confidence logits for class 0 (bubble)
+    const float* conf_logits = out.channel(0).row(4); 
+    int num_proposals = out.w; // 8400
+    
+    float max_conf = 0.f;
+    for (int i = 0; i < num_proposals; i++) {
+        float logit = conf_logits[i];
+        // Apply sigmoid: conf = 1 / (1 + e^-logit)
+        float conf = 1.f / (1.f + expf(-logit));
+        if (conf > max_conf) max_conf = conf;
+    }
+
+    bubble_prob = max_conf;
     return 0;
 }
 
