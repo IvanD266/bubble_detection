@@ -1,0 +1,8 @@
+g++ run.cpp -o app \
+    -I/home/rpi3/ncnn/build/install/include \
+    -L/home/rpi3/ncnn/build/install/lib \
+    `pkg-config --cflags --libs opencv4` \
+    -lncnn \
+    -fopenmp
+
+
